@@ -1,123 +1,228 @@
-import Head from "next/head";
-import Image from "next/image";
-import { Inter } from "next/font/google";
-import styles from "@/styles/Home.module.css";
+import {
+  Stack,
+  FormControl,
+  Input,
+  Button,
+  useColorModeValue,
+  Heading,
+  Text,
+  Container,
+  Flex,
+  HStack,
+  Box,
+  Spacer,
+  VStack,
+  useDisclosure,
+  TextBox,
+} from "@chakra-ui/react";
+import { CheckIcon, SmallCloseIcon } from "@chakra-ui/icons";
+import { isMobile, isBrowser, isDesktop, isAndroid } from "react-device-detect";
+import TransactionXumm from "./xummmodal.js";
+import React, { useState, useRef, useEffect } from "react";
+require("dotenv").config();
 
-const inter = Inter({ subsets: ["latin"] });
+export default function XummTop(props) {
+  const ws = useRef(WebSocket);
+  const { isOpen, onOpen, onClose } = useDisclosure();
+  const [wsConnection, setwsConnection] = React.useState("");
+  const [qrMatrix, setQrMatrix] = React.useState("");
+  const [mobileTxnUrl, setMobileTxnUrl] = React.useState("");
+  const [showSpinner, setShowSpinner] = React.useState(false);
+  const [listenWs, setlistenWs] = React.useState(false);
+  const [requestResolved, setRequestResolved] = React.useState(false);
+  const [requestResolvedMessage, setrequestResolvedMessage] =
+    React.useState("");
+  const [requestFailed, setRequestFailed] = React.useState(false);
+  const [signedinAccount, setSignedinAccount] = React.useState("");
+  const [signInClicked, setSignInClicked] = React.useState(false);
 
-export default function Home() {
+  function closeModal() {
+    setSignInClicked(false);
+    setShowSpinner(false);
+  }
+
+  function Logout() {
+    props.logout();
+  }
+
+  const postXummPayload = async (requestContent) => {
+    try {
+      let response = await fetch("/api/createpayload", {
+        method: "post",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestContent),
+      });
+      let json = await response.json();
+      return { success: true, data: json };
+    } catch (error) {
+      return { success: false };
+    }
+  };
+
+  const getXummPayload = async (requestContent) => {
+    try {
+      let response = await fetch("/api/getpayload", {
+        method: "post",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payloadID: requestContent }),
+      });
+      let json = await response.json();
+      return { success: true, data: json };
+    } catch (error) {
+      return { success: false };
+    }
+  };
+
+  const checkValidSignature = async (requestContent) => {
+    try {
+      let response = await fetch(
+        process.env.REACT_APP_PROXY_ENDPOINT + "/xumm/checksig",
+        {
+          method: "post",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hex: requestContent }),
+        }
+      );
+      let json = await response.json();
+      return { success: true, data: json };
+    } catch (error) {
+      return { success: false };
+    }
+  };
+
+  const Signin = async () => {
+    var request;
+    if (isDesktop) {
+      request = {
+        txjson: {
+          TransactionType: "SignIn",
+        },
+      };
+    } else {
+      request = {
+        txjson: {
+          TransactionType: "SignIn",
+        },
+      };
+    }
+    let responseXum = await postXummPayload(request);
+    if (responseXum.data?.refs.qr_matrix) {
+      setwsConnection(responseXum.data?.refs.websocket_status);
+      setQrMatrix(responseXum.data?.refs.qr_png);
+      setMobileTxnUrl(responseXum.data?.next.always);
+      setShowSpinner(true);
+      setSignInClicked(true);
+
+      ws.current = new WebSocket(responseXum.data?.refs.websocket_status);
+      setlistenWs(true);
+
+      if (isMobile) {
+        if (isAndroid) {
+          window.open(
+            "xumm://xumm.app/sign/" + responseXum.data?.uuid + "/deeplink"
+          );
+        } else {
+          window.open(responseXum.data?.next.always);
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    //if (!ws.current) return;
+    ws.current.onmessage = async (e) => {
+      if (!listenWs) return;
+      let responseObj = JSON.parse(e.data.toString());
+      if (responseObj.signed != null) {
+        const payload = await getXummPayload(responseObj.payload_uuidv4);
+        const isValid = await checkValidSignature(payload.data.response.hex);
+        if (payload.data != null) {
+          let payloadMeta = payload.data;
+          if (
+            payloadMeta.meta.resolved == true &&
+            payloadMeta.meta.signed == true
+          ) {
+            setSignedinAccount(payloadMeta.response.account);
+            setrequestResolvedMessage("Sign-In request successful.");
+          } else if (
+            payloadMeta.meta.resolved == true &&
+            payloadMeta.meta.signed == false
+          ) {
+            setRequestFailed(true);
+            setrequestResolvedMessage("Sign-In request has been rejected.");
+          } else if (
+            payloadMeta.meta.resolved == false &&
+            payloadMeta.meta.signed == false &&
+            payloadMeta.meta.cancelled == true &&
+            payloadMeta.meta.expired == true
+          ) {
+            setRequestFailed(true);
+            setrequestResolvedMessage("Sign-In request has been cancelled.");
+          } else if (
+            payloadMeta.meta.resolved == false &&
+            payloadMeta.meta.signed == false &&
+            payloadMeta.meta.cancelled == false &&
+            payloadMeta.meta.expired == true
+          ) {
+            setRequestFailed(true);
+            setrequestResolvedMessage("Sign-In request has expired.");
+          }
+        }
+        closeModal();
+        setShowSpinner(false);
+        setRequestResolved(true);
+        ws.current.close();
+        if (isMobile) {
+          window.open(mobileTxnUrl);
+        }
+        if (
+          isValid.data.xrpAddress != undefined &&
+          isValid.data.session != undefined
+        ) {
+          props.setStateValues(isValid.data);
+        }
+      }
+    };
+  }, [listenWs]);
+
   return (
     <>
-      <Head>
-        <title>Create Next Appss</title>
-        <meta name="description" content="Generated by create next app" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/favicon.ico" />
-      </Head>
-      <main className={styles.main}>
-        <div className={styles.description}>
-          <p>
-            Get started by editing&nbsp;
-            <code className={styles.code}>src/pages/index.js</code>
-          </p>
-          <div>
-            <a
-              href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
+      {props.userAddress == "" && props.userSession == "" ? (
+        <buttons>
+          <button
+            onClick={Signin}
+            className="connect-button button is-medium is-brutal my my-2"
+          >
+            Connect to XUMMdd
+          </button>
+        </buttons>
+      ) : (
+        <>
+          <buttons>
+            <button
+              onClick={Logout}
+              className="connect-button button is-medium is-brutal my my-2"
             >
-              By{" "}
-              <Image
-                src="/vercel.svg"
-                alt="Vercel Logo"
-                className={styles.vercelLogo}
-                width={100}
-                height={24}
-                priority
-              />
-            </a>
-          </div>
-        </div>
-
-        <div className={styles.center}>
-          <Image
-            className={styles.logo}
-            src="/next.svg"
-            alt="Next.js Logo"
-            width={180}
-            height={37}
-            priority
-          />
-          <div className={styles.thirteen}>
-            <Image
-              src="/thirteen.svg"
-              alt="13"
-              width={40}
-              height={31}
-              priority
-            />
-          </div>
-        </div>
-
-        <div className={styles.grid}>
-          <a
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <h2 className={inter.className}>
-              Docs <span>-&gt;</span>
-            </h2>
-            <p className={inter.className}>
-              Find in-depth information about Next.js features and&nbsp;API.
-            </p>
-          </a>
-
-          <a
-            href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <h2 className={inter.className}>
-              Learn <span>-&gt;</span>
-            </h2>
-            <p className={inter.className}>
-              Learn about Next.js in an interactive course with&nbsp;quizzes!
-            </p>
-          </a>
-
-          <a
-            href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <h2 className={inter.className}>
-              Templates <span>-&gt;</span>
-            </h2>
-            <p className={inter.className}>
-              Discover and deploy boilerplate example Next.js&nbsp;projects.
-            </p>
-          </a>
-
-          <a
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <h2 className={inter.className}>
-              Deploy <span>-&gt;</span>
-            </h2>
-            <p className={inter.className}>
-              Instantly deploy your Next.js site to a shareable URL
-              with&nbsp;Vercel.
-            </p>
-          </a>
-        </div>
-      </main>
+              Logout
+            </button>
+          </buttons>
+          <p id="wallet" className="is-visible">
+            Connected to: {props.userAddress}
+          </p>
+        </>
+      )}
+      {signInClicked && isBrowser ? (
+        <TransactionXumm
+          isOpen={onOpen}
+          onClose={onClose}
+          txnPng={qrMatrix}
+          closeModal={closeModal}
+          TransactionTextHeader={"Sign-In"}
+          TransactionText={"Sign into XUMM"}
+        />
+      ) : (
+        <></>
+      )}
     </>
   );
 }
